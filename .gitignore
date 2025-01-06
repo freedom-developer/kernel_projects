@@ -50,3 +50,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# build_run_kernel
+build_run_kernel/src
+build_run_kernel/build
+build_run_kernel/disks
+build_run_kernel/output.txt
+
