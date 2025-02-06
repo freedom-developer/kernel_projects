@@ -2,10 +2,7 @@ PWD := $(shell pwd)
 KVER := $(shell uname -r)
 KDIR := /lib/modules/$(KVER)/build
 
-obj-m := monitor.o
-monitor-objs := main.o ../common/Syscall.o
-
-ccflags-y  := -I$(KDIR)/arch/x86/include
+obj-m := demo.o
 
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD)
