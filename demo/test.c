@@ -27,11 +27,9 @@ void siguser1_handler(int signum)
 
 int main()
 {
-    // MyStruct s1, s2;
-
-    // printf("struct size: %ld\n", sizeof(MyStruct));
-    // printf("s1: %p\n", &s1);
-    // printf("s2: %p\n", &s2);
+    char ch1;
+    printf("ch1 at %p\n", &ch1);
+    
     signal(SIGUSR1, siguser1_handler);
     
     pause();

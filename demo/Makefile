@@ -8,4 +8,4 @@ all:
 	$(MAKE) -C $(KDIR) M=$(PWD)
 
 clean:
-	$(RM) -rf .tmp_versions .*.mk .*.cmd *.ko *.mod.c *.o *.symvers *.order
+	$(RM) -rf .tmp_versions .*.mk .*.cmd *.ko *.mod.c *.o *.symvers *.order *-safe

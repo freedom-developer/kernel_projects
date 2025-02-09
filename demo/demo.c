@@ -1,103 +1,11 @@
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/version.h>
-#include <linux/kdev_t.h>
-#include <linux/proc_fs.h>
-#include <linux/uaccess.h>
-
 #include <linux/sched/signal.h>
 #include <asm/pgtable.h>
 
 #define POINTER 0x7ffd496e08f0
 
-#define PROC_FILE_BUF_LEN 4096
-static char proc_file_buf[PROC_FILE_BUF_LEN];
-static size_t count;
-
-// 打开文件
-static int proc_file_open(struct inode *inode, struct file *file)
-{
-    printk("proc_file_open\n");
-
-    return 0;
-}
-
-// 读文件
-static ssize_t proc_file_read(struct file *file, char __user *buffer, size_t size, loff_t *f_pos)
-{
-    printk("proc_file_read, count: %ld, f_pos: %ld\n", count, *f_pos);
-
-    // 读取proc_file文件内容
-    if (!count)
-        return 0;
-    
-    size_t left = count - *f_pos;
-    
-    size_t copy = left < size ? left : size;
-    if (copy_to_user(buffer, proc_file_buf + *f_pos, copy)) {
-        printk("读取失败\n");
-        return -EFAULT;
-    }
-
-    *f_pos += copy;
-
-    return copy;
-}
-
-static ssize_t proc_file_write(struct file *file, const char __user *buffer, size_t size, loff_t *f_pos)
-{
-    printk("proc_file_write\n");
-    if (count + *f_pos >= PROC_FILE_BUF_LEN)
-        return 0;
-    size_t left = PROC_FILE_BUF_LEN - *f_pos;
-    size_t copy = left < size ? left : size;
-
-    // 追加写
-    if (copy_from_user(proc_file_buf + count + *f_pos, buffer, copy)) {
-        printk("写失败\n");
-        return -EFAULT;
-    }
-
-    count += copy;
-    *f_pos += copy;
-
-    return copy;
-}
-
-static const struct file_operations proc_file_fops = {
-    .owner = THIS_MODULE,
-    .open = proc_file_open,
-    .read = proc_file_read,
-    .write = proc_file_write,
-};
-
-static void proc_test(void)
-{
-    printk("proc_test\n");
-    // 创建一个proc_fs目录
-    struct proc_dir_entry *proc_dir = proc_mkdir("proc_test", NULL);
-    if (!proc_dir) {
-        printk("proc_mkdir failed\n");
-        return;
-    }
-    
-    // 创建一个proc_fs文件
-    struct proc_dir_entry *proc_file = proc_create("proc_file", 0666, proc_dir, &proc_file_fops);
-    if (!proc_file) {
-        printk("proc_create failed\n");
-        return;
-    }
-    
-    printk("proc_test success\n");
-}
-
-static void proc_test_remove(void)
-{
-    printk("proc_test_remove\n");
-    // 删除proc_fs目录
-    remove_proc_subtree("proc_test", NULL);
-}
-
+// 根据进程名查找进程
 struct task_struct *find_task_by_name(const char *name)
 {
     struct task_struct *p;
@@ -109,10 +17,11 @@ struct task_struct *find_task_by_name(const char *name)
     return NULL;
 }
 
-// 打印一页中的表项
+// 打印一页中的非0物理地址表项
 void print_page(unsigned long *page)
 {
     int i;
+    
     // 页中保存的地址是物理地址
     if (!page) {
         printk("page is NULL\n");
@@ -126,8 +35,9 @@ void print_page(unsigned long *page)
     }
 }
 
-// 根据一个线性地址查找其pgd表项, pud表项, pmd表项, pte表项
-void print_paging(struct mm_struct *mm, unsigned long addr)
+// 根据一个线性地址查找其pgd表项, pud表项, pmd表项, pte表项，进而获取该线性地址对应的物理地址
+// 注意此线性地址为某个进程地址空间的线性地址，而不是内核地址空间的线性地址
+void print_paging(struct task_struct *tsk, unsigned long addr)
 {
     pgd_t *pgd;
     pud_t *pud;
@@ -136,21 +46,25 @@ void print_paging(struct mm_struct *mm, unsigned long addr)
     int idx;
     unsigned long phys;
 
-    // 根据mm_struct结构体查找pgd表项
-    pgd = mm->pgd; // PGD对应的页的虚拟地址
+    // 查找addr对应的pgd表项：可通过pgd_offset(tsk->mm, addr)获取
+    pgd = tsk->mm->pgd; // PGD对应的页的虚拟地址
     print_page((unsigned long *)pgd);
     // 根据线性地址查找pgd表项
     idx = pgd_index(addr);
     pgd = pgd + idx; // pgd表项
     printk("pgd: idx = %d, val = %lx\n", idx, *pgd);
+    // 通过pgd_offset获取pgd表项
+    printk("pgd: pgd_offset %lx\n", *(pgd_offset(tsk->mm, addr)));
     
-    // 根据pgd表项查找pud表项
+    // 根据pgd表项查找addr对应的pud表项：可通过pud_offset(pgd, addr)获取
     pud = pgd_page_vaddr(*pgd); // PUD对应的页的虚拟地址
     print_page((unsigned long *)pud);
     // 根据线性地址查找pud表项
     idx = pud_index(addr);
     pud = pud + idx; // pud表项
     printk("pud: idx = %d, val = %lx\n", idx, *pud);
+    // 通过pud_offset获取pud表项
+    // printk("pud: pud_offset %lx\n", *(pud_offset(pgd, addr)));
 
     // 根据pud表项查找pmd表项
     pmd = pud_page_vaddr(*pud); // PMD对应的页的虚拟地址
@@ -159,6 +73,8 @@ void print_paging(struct mm_struct *mm, unsigned long addr)
     idx = pmd_index(addr);
     pmd = pmd + idx; // pmd表项
     printk("pmd: idx = %d, val = %lx\n", idx, *pmd);
+    // 通过pmd_offset获取pmd表项
+    printk("pmd: pmd_offset %lx\n", *(pmd_offset(pud, addr)));
 
     // 根据pmd表项查找pte表项
     pte = (pte_t *)pmd_page_vaddr(*pmd); // PTE对应的页的虚拟地址
@@ -167,6 +83,8 @@ void print_paging(struct mm_struct *mm, unsigned long addr)
     idx = pte_index(addr);
     pte = pte + idx; // pte表项
     printk("pte: idx = %d, val = %lx\n", idx, *pte);
+    // 通过pte_offset_map获取pte表项
+    printk("pte: pte_offset %lx\n", *(pte_offset_map(pmd, addr)));
 
     // 根据pte表项查找物理地址
     phys = (unsigned long)pte_pfn(*pte); // 获取pte表项对应的页框号
@@ -179,6 +97,18 @@ void print_paging(struct mm_struct *mm, unsigned long addr)
 void paging_test(void)
 {
     printk("paging_test\n");
+    
+    printk("CONFIG_PGTABLE_LEVELS: %d\n", CONFIG_PGTABLE_LEVELS);
+    
+    printk("PAGE_SHIFT: %d\n", PAGE_SHIFT);
+    printk("PAGE_SIZE: %d\n", PAGE_SIZE);
+    printk("PAGE_MASK: %lx\n", PAGE_MASK);
+
+    printk("PTRS_PER_PTE: %d\n", PTRS_PER_PTE);
+    
+    printk("PTRS_PER_PMD: %d\n", PTRS_PER_PMD);
+    printk("PTRS_PER_PUD: %d\n", PTRS_PER_PUD);
+    printk("PTRS_PER_PGD: %d\n", PTRS_PER_PGD);
     printk("PAGE_OFFSET: %lx\n", PAGE_OFFSET);
     printk("PAGE_SHIFT: %lx\n", PAGE_SHIFT);
     printk("PAGE_MASK: %lx\n", PAGE_MASK);
@@ -191,21 +121,11 @@ void paging_test(void)
     }
     printk("find_task_by_name success\n");
     printk("pid: %d, comm: %s\n", tsk->pid, tsk->comm);
-    pgd_t *pgd = tsk->mm->pgd;
-    printk("cr3: %lx\n", pgd);
+    print_paging(tsk, 0x7fffd4a00047);
 
     // 给进程tsk的用户空间的指定虚拟地址上分配一个页框，并在此页框中设置一个4字节整数，然后向进程tsk发送信号SIGUSR1，让进程tsk执行信号处理函数，在信号处理函数中读取该整数，并打印出来。
     unsigned long virt = POINTER;
-    struct page *page = get_free_page(GFP_KERNEL);
-    if (!page) {
-        printk(KERN_ERR "get_free_page failed\n");
-        return -1;
-    }
-    printk("get_free_page success\n");
-    printk("page: %lx\n", page);
-    printk("page->virtual: %lx\n", page_address(page));
-    printk("page->physical: %lx\n", page_to_phys(page));
-    printk("page->index: %lx\n", page->index);
+    // struct page *page = get_free_page(GFP_KERNEL);
 
     
 }
